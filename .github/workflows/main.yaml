@@ -1,6 +1,9 @@
 name: Modern DevOps Pipeline
 
-on: [push]
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build-and-test:
