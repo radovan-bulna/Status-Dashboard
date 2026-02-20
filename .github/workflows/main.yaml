@@ -1,4 +1,4 @@
-name: Modern DevOps Pipeline
+name: Advanced DevOps Pipeline
 
 on:
   push:
@@ -6,23 +6,71 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-test:
+  lint-and-audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Docker Image
-        run: docker build -t status-app .
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip' # Automaticky cachuje knižnice
 
-      - name: Run Security Scan (Trivy)
+      - name: Install Tools
+        run: pip install flake8 safety
+
+      - name: Style Check (Flake8)
+        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Dependency Audit (Safety)
+        run: safety check
+
+  build-and-scan:
+    needs: lint-and-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. Vylepšený Build s Cache
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: status-app:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 2. Bezpečnostný sken s výstupom do súboru
+      - name: Run Trivy Security Scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'status-app'
-          severity: 'CRITICAL'
+          image-ref: 'status-app:latest'
+          format: 'table'
+          exit-code: '1' # Zlyhá pipeline len pri kritických chybách
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
 
-      - name: Test Container Health
+      # 3. Test funkčnosti
+      - name: Integration Test
         run: |
-          docker run -d -p 5000:5000 --name test-app status-app
+          docker run -d -p 5000:5000 --name test-app status-app:latest
           sleep 5
-          curl --fail http://localhost:5000/health
+          if curl -f http://localhost:5000/health; then
+            echo "## ✅ Healthcheck Passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Healthcheck Failed" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
           docker stop test-app
+
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo "### 📊 Build Report" >> $GITHUB_STEP_SUMMARY
+          echo "* Workflow triggered by: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "* Image Tag: status-app:latest" >> $GITHUB_STEP_SUMMARY
